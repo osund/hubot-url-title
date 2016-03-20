@@ -25,6 +25,9 @@ request    = require 'request'
 charset    = require 'charset'
 jschardet  = require 'jschardet'
 Iconv      = require 'iconv'
+httpAgent  = require 'socks5-http-client/lib/Agent'
+httpsAgent = require 'socks5-https-client/lib/Agent'
+utf8       = require 'utf8'
 
 MAX_SIZE_DOWNLOADED_FILES = 1000000
 
@@ -50,21 +53,44 @@ module.exports = (robot) ->
 
       unless ignore
         size = 0
-        request url, {encoding:null}, (error, response, body) ->
-          if response.statusCode == 200
+        socksAgent = false
+        socksAgentOptions = { socksHost: null, socksPort: null }
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1"
+
+        if process.env.HUBOT_URL_TITLE_SOCKS_HOST?
+          socksAgentOptions['socksHost'] = process.env.HUBOT_URL_TITLE_SOCKS_HOST
+
+        if process.env.HUBOT_URL_TITLE_SOCKS_PORT?
+          socksAgentOptions['socksPort'] = process.env.HUBOT_URL_TITLE_SOCKS_PORT
+
+        if process.env.HUBOT_URL_TITLE_USESOCKS?
+          if url.match /http:\/\//
+            socksAgent = httpAgent
+          else
+            socksAgent = httpsAgent
+
+          if url.match /https:\/\/facebookcorewwwi\.onion/
+            process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+        request (url: url, header: {encoding:null}, agentClass: socksAgent, agentOptions: socksAgentOptions), (error, response, body) ->
+          console.log(error)
+          if (!error && response.statusCode == 200)
             enc = charset(response.headers, body)
             enc = enc || jschardet.detect(body).encoding.toLowerCase()
             robot.logger.debug "webpage encoding is #{enc}"
+            expandedurl = ""
+            if (response.request.uri.href != url)
+              expandedurl = " - " + response.request.uri.href
             if enc != 'utf-8'
               iconv = new Iconv.Iconv(enc, 'UTF-8//TRANSLIT//IGNORE')
-              html = iconv.convert(new Buffer(body, 'binary')).toString('utf-8')
+              html = utf8.encode(body)
               document = cheerio.load(html)
-              title = document('head title').first().text().trim().replace(/\s+/g, " ")
-              msg.send "#{title}"
+              title = utf8.decode(document('head title').first().text().trim().replace(/\s+/g, " "))
+              msg.send "#{title}#{expandedurl}"
             else
               document = cheerio.load(body)
-              title = document('head title').first().text().trim().replace(/\s+/g, " ")
-              msg.send "#{title}"
+              title = utf8.decode(document('head title').first().text().trim().replace(/\s+/g, " "))
+              msg.send "#{title}#{expandedurl}"
         .on 'data', (chunk) ->
           size += chunk.length
           if size > MAX_SIZE_DOWNLOADED_FILES
